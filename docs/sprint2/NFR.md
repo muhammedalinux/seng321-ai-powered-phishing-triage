@@ -114,9 +114,9 @@ Application logs shall avoid raw email bodies, credentials, access tokens, and u
 
 The project shall document the retention behavior for submitted messages, extracted evidence, case history, and operational logs.
 
-**Target:** Every persisted sensitive-data category has an identified owner, retention decision, and deletion/anonymization approach, even where automated deletion is deferred beyond the MVP.
+**Target:** Every persisted sensitive-data category has an identified owner and a documented retention-policy entry. Until the team confirms the final durations, the MVP policy document shall explicitly mark the retention period as pending and define the interim handling/deletion decision.
 
-**Verification:** Documentation review and database/schema inspection.
+**Verification:** Documentation review and database/schema inspection. The current MVP verification checks that the retention-policy document exists, covers submitted messages, extracted evidence, CaseHistory, and operational logs, and clearly marks unconfirmed periods. The time periods will be added to this requirement after team confirmation.
 
 ## 5. Performance Requirements
 
@@ -148,9 +148,9 @@ The system shall expose a completed or partial risk-assessment result to the das
 
 The system shall not consume unbounded memory or storage when processing malformed, large, or repeated messages.
 
-**Target:** Defined maximum upload/message limits are enforced, and the stress test completes without process termination or uncontrolled resource growth.
+**Target:** Defined maximum upload/message limits are enforced, and the worker process remains below 512 MB resident memory during the agreed stress test. The stress test must complete without process termination, disk exhaustion, or an exceeded memory limit.
 
-**Verification:** Resource-monitored tests using boundary-size messages, repeated delivery, malformed MIME structures, and large attachment metadata.
+**Verification:** Resource-monitored tests using boundary-size messages, repeated delivery, malformed MIME structures, and large attachment metadata. Record peak resident memory, disk usage, test duration, concurrency, and input sizes; pass only when peak worker memory is below 512 MB and the other defined limits are respected.
 
 ## 6. Reliability and Fault Handling Requirements
 
@@ -192,17 +192,17 @@ The API shall return documented, structured error responses without exposing sta
 
 An employee shall be able to understand how to submit a suspicious email and whether the submission was accepted.
 
-**Target:** At least 80% of representative test users complete the submission task without facilitator intervention, and all validation errors identify the corrective action.
+**Target:** At least 80% of 5 representative test participants (at least 4 of 5) complete the submission task without facilitator intervention, and all validation errors identify the corrective action.
 
-**Verification:** Task-based usability test with a documented participant count, task script, and issue log.
+**Verification:** Task-based usability test with 5 documented participants, a task script, completion count, facilitator-intervention count, and issue log.
 
 ### NFR-021 – Clear analyst review flow
 
 The analyst dashboard shall present Case status, risk recommendation, evidence availability, and final-decision controls distinctly.
 
-**Target:** In usability testing, at least 80% of representative analysts correctly distinguish automated risk from final classification and complete the review workflow.
+**Target:** In usability testing, at least 80% of 5 representative analyst participants (at least 4 of 5) correctly distinguish automated risk from final classification and complete the review workflow.
 
-**Verification:** Task-based usability test and review of incorrect-task outcomes.
+**Verification:** Task-based usability test with 5 documented analyst participants and review of completion counts, incorrect-task outcomes, and facilitator interventions.
 
 ### NFR-022 – Accessibility baseline
 
@@ -250,9 +250,9 @@ The project shall maintain automated tests for authentication/authorization, par
 
 The project shall run the agreed formatter, linter, and static-analysis checks before merging changes.
 
-**Target:** The default branch has no newly introduced high-severity static-analysis findings attributable to the change under review.
+**Target:** The default branch has no newly introduced high-severity SonarQube findings attributable to the change under review. The agreed formatter, linter, and SonarQube analysis must run before merging changes.
 
-**Verification:** CI report and Pull Request review checklist.
+**Verification:** SonarQube analysis report, CI output, and Pull Request review checklist. The report must identify the analyzed commit and the resulting findings by severity.
 
 ### NFR-028 – Configuration and dependency transparency
 
@@ -292,10 +292,27 @@ Optional model and threat-intelligence providers shall be replaceable by determi
 | Maintainability/testability | NFR-024–NFR-028 | Architecture review, CI, static analysis, setup rehearsal, and test inspection |
 | Interoperability | NFR-029–NFR-030 | Equivalent-channel integration tests and offline fixture execution |
 
+### 10.1 Mapping to System Vision quality requirements
+
+The System Vision document uses the shorter identifiers `NFR-01` through `NFR-10`. The following mapping connects those baseline requirements to the detailed requirements in this document.
+
+| System Vision requirement | Detailed requirements | Coverage |
+| --- | --- | --- |
+| NFR-01 Security | NFR-001–NFR-006 | Authentication, authorization, validation, untrusted-content handling, and secure configuration |
+| NFR-02 Privacy | NFR-007–NFR-011 | Role-limited access, attribution privacy, data minimization, logging, and retention policy |
+| NFR-03 Reliability | NFR-016–NFR-019 | Durability, failure isolation, idempotency, and consistent errors |
+| NFR-04 Usability | NFR-020–NFR-021, NFR-023 | Employee submission, analyst review, status labels, and actionable errors |
+| NFR-05 Maintainability | NFR-024–NFR-028 | Modular separation, contracts, tests, SonarQube analysis, and configuration transparency |
+| NFR-06 Interoperability | NFR-029–NFR-030 | Common intake representation and replaceable external integrations |
+| NFR-07 Performance | NFR-012–NFR-015 | API latency, triage latency, and resource behavior |
+| NFR-08 Traceability | NFR-017, NFR-019, NFR-026 | Case-history persistence, structured errors, and test-to-requirement traceability |
+| NFR-09 Fault Handling | NFR-004, NFR-008, NFR-010, NFR-017–NFR-020 | Invalid input, unavailable evidence, safe logs, downstream failures, and error handling |
+| NFR-10 Testability | NFR-004, NFR-018, NFR-024–NFR-026, NFR-030 | Input, idempotency, modularity, automated tests, and offline test doubles |
+
 ## 11. Assumptions and Open Decisions
 
 - The exact deployment environment and hardware used for performance measurement must be recorded before the final benchmark.
-- The team must decide whether authentication is implemented locally or through an external identity provider.
+- Authentication is specified by the current `docs/OPENAPI.yaml` contract as JWT bearer authentication. Implementation and tests shall align with that contract; if the API security scheme changes, `docs/OPENAPI.yaml` and this document must be updated together.
 - The team must define maximum accepted message and attachment metadata sizes for the MVP.
 - Retention duration and deletion/anonymization behavior require team and course-policy confirmation.
 - The QA and DevOps team members should review the verification methods and confirm the CI/static-analysis commands before this document is marked final.
