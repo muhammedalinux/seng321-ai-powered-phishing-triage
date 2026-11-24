@@ -95,11 +95,11 @@ Each accepted Report creates exactly one Case. Reports containing the same suspi
 
 #### FR-001 – User authentication
 
-The system shall authenticate users before granting access to protected operations.
+The system shall authenticate users with JWT bearer tokens before granting access to protected operations. Issued access tokens shall expire after 3,600 seconds.
 
 **Acceptance criteria**
 
-- Valid credentials produce an authenticated session or access token.
+- Valid credentials produce a JWT bearer access token with a 3,600-second lifetime.
 - Invalid credentials are rejected without revealing which credential was incorrect.
 - Missing, invalid, or expired authentication credentials produce an unauthorized response.
 
@@ -119,11 +119,12 @@ The system shall enforce permissions based on the user's assigned role.
 
 #### FR-003 – Web report submission
 
-The system shall allow an authenticated employee to submit a suspicious email through the web interface using supported manual fields or a supported `.eml` upload.
+The system shall allow an authenticated employee to submit a suspicious email through the web interface using supported manual fields or a supported `.eml` upload. Uploaded `.eml` files shall be limited to 5 MB.
 
 **Acceptance criteria**
 
 - The system validates required submission data before accepting the report.
+- An `.eml` file larger than 5 MB is rejected with HTTP `413` and does not create a Report.
 - A valid submission receives a unique Report identifier and creation timestamp.
 - Malformed or unsupported input is rejected with a useful validation error.
 - The original submitted content is preserved or an explicit ingestion error is recorded.
@@ -186,7 +187,7 @@ The system shall distinguish available evidence from unavailable or failed check
 
 #### FR-009 – Advisory assessment
 
-The system shall generate an advisory risk assessment from available technical and content-based signals.
+The system shall generate an advisory risk assessment from available technical and content-based signals. The assessment attempt shall time out after 30 seconds when the required processing cannot complete.
 
 **Acceptance criteria**
 
@@ -194,10 +195,11 @@ The system shall generate an advisory risk assessment from available technical a
 - The risk category is one of `Low`, `Medium`, or `Critical`.
 - The assessment is clearly labeled as an automated recommendation.
 - The assessment does not directly set the analyst's final classification or resolve a Case.
+- A timeout after 30 seconds produces a failed or partial assessment state with a recorded reason.
 
 #### FR-010 – Analysis lifecycle
 
-The system shall represent analysis status separately from Case investigation status.
+The system shall represent analysis status separately from Case investigation status and shall allow an analyst to retry a failed assessment asynchronously.
 
 **Acceptance criteria**
 
@@ -205,6 +207,8 @@ The system shall represent analysis status separately from Case investigation st
 - Completing an analysis does not automatically change the Case status.
 - A failed analysis does not delete or close the Case.
 - A Case with a failed or partial assessment remains available for human review.
+- A retry is accepted with HTTP `202` only when the current analysis status is `Failed`; the status becomes `Pending` while the retry runs.
+- A retry while the analysis status is `Pending` or `Completed` is rejected with HTTP `409` and does not change the assessment.
 
 #### FR-011 – Untrusted content handling
 
@@ -230,11 +234,13 @@ The system shall create exactly one Case for each accepted Report.
 
 #### FR-013 – Analyst queue
 
-The system shall provide authorized analysts with a prioritized Case queue.
+The system shall provide authorized analysts with a prioritized and filterable Case queue. By default, Cases shall be ordered `Critical`, then `Medium`, then `Low`, followed by cases without a completed risk assessment.
 
 **Acceptance criteria**
 
 - The queue displays relevant Case status and available risk category information.
+- Analysts can filter by investigation status, analysis status, and risk category, and can select priority or newest-first sorting.
+- Pagination is supported for queue results.
 - Analysts can open a Case detail view from the queue.
 - The queue does not expose sensitive analysis details to unauthenticated users or employees.
 
@@ -247,6 +253,7 @@ The system shall support the Case investigation statuses `New`, `Under Review`, 
 - An authorized analyst can move a `New` Case to `Under Review`.
 - An authorized analyst can resolve a Case only after recording a final classification.
 - Invalid status transitions are rejected.
+- A Case with status `Resolved` is final and cannot be changed through the Case API.
 - Every successful status transition is recorded in CaseHistory.
 
 #### FR-015 – Final classification
@@ -267,6 +274,7 @@ The system shall allow an authorized analyst to add notes to a Case.
 **Acceptance criteria**
 
 - Notes are associated with the correct Case and author.
+- Empty notes are rejected; `note_text` must contain at least one character.
 - Notes are timestamped and retained in the case history.
 - Notes are not visible to employees through the employee report-status view.
 
@@ -278,7 +286,7 @@ The system shall maintain an auditable history of significant Case actions.
 
 - Case creation, status changes, final classifications, and analyst notes produce history records.
 - Each history record contains an actor or system source and timestamp.
-- History records cannot be silently changed through normal Case operations.
+- No API operation edits or deletes an existing CaseHistory entry.
 
 ### 6.6 Employee status access and administration
 
@@ -292,25 +300,48 @@ The system shall allow an employee to view the status of their own verified repo
 - The view includes report and Case status but excludes analyst notes, internal evidence, and action history.
 - An employee cannot query another employee's reports by changing an identifier in a request.
 
-#### FR-019 – Administrative configuration
+#### FR-019 – Administrative scope
 
-The system shall allow an authorized System Administrator to manage user accounts, roles, reporting-mailbox settings, and operational logs.
+The system shall keep account, role, mailbox-configuration, and operational-log administration outside the MVP public API. The System Administrator remains a documented project actor, but these administration endpoints are deferred beyond the current API scope.
 
 **Acceptance criteria**
 
-- Only an authorized administrator can perform configuration operations.
-- Configuration changes are validated before being applied.
-- Administrative actions are auditable.
+- The OpenAPI contract exposes no MVP administration endpoints.
+- Administrator privileges do not automatically grant analyst privileges.
+- Deferred administration responsibilities are recorded as a future-scope decision rather than presented as implemented MVP functionality.
 
 #### FR-020 – Error and partial-result handling
 
-The system shall preserve an accepted Report and Case when a downstream parser, model, or threat-intelligence operation fails.
+The system shall preserve an accepted Report and Case when a downstream parser, model, or threat-intelligence operation fails or exceeds the 30-second assessment timeout.
 
 **Acceptance criteria**
 
 - The failure is stored with an appropriate error or analysis status.
 - The Case remains visible to an authorized analyst.
 - The system does not present a failed check as a successful low-risk result.
+- An assessment timeout is recorded as a failure or partial result and does not close or delete the Case.
+
+#### FR-021 – Case assignment
+
+The system shall allow an authorized analyst to assign or reassign a Case to a user with the Analyst role.
+
+**Acceptance criteria**
+
+- `assignee_id` accepts only an existing Analyst user identifier or a permitted null value.
+- Assigning a Case to an Employee or Administrator is rejected with HTTP `400`.
+- Assignment changes are recorded in CaseHistory.
+- Case assignment does not change the risk assessment or final classification.
+
+#### FR-022 – Metrics summary
+
+The system shall provide an analyst-only metrics summary of Case counts by investigation status and advisory risk category.
+
+**Acceptance criteria**
+
+- The summary includes total Cases and counts for `New`, `Under Review`, and `Resolved`.
+- The summary includes counts for `Low`, `Medium`, `Critical`, and `Unscored`.
+- The metrics response is consistent with the Case queue data.
+- Employees and unauthorized users cannot access the metrics summary.
 
 ## 7. Use Cases
 
@@ -390,7 +421,7 @@ The following rules apply across the SRS:
 | FR-001–FR-002, FR-018–FR-019 | `SYSTEM_VISION_BOUNDARY.md` access scope and roles; Project Proposal Sections 5 and 7 |
 | FR-003–FR-008 | `SYSTEM_VISION_BOUNDARY.md` MVP scope and trust boundaries; Project Proposal Sections 4, 6, and 10 |
 | FR-009–FR-011 | `SYSTEM_VISION_BOUNDARY.md` risk and AI authority rules; Project Proposal Section 7 |
-| FR-012–FR-017 | `SYSTEM_VISION_BOUNDARY.md` workflow, Case model, and auditability rules |
+| FR-012–FR-017, FR-021–FR-022 | `SYSTEM_VISION_BOUNDARY.md` workflow, Case model, auditability rules, and analyst dashboard behavior |
 | FR-020 | `SYSTEM_VISION_BOUNDARY.md` fault handling and reliability requirements |
 | UC-01–UC-06 | Project Proposal stakeholders and System Vision workflows |
 
@@ -398,8 +429,8 @@ Before implementation, these requirements should be reconciled with the OpenAPI 
 
 ## 10. Open Questions
 
-- Which authentication mechanism and identity provider will be used in the MVP?
-- Will risk assessment run synchronously during submission or asynchronously through a background job?
+- JWT bearer authentication with a 3,600-second token lifetime is defined by `docs/OPENAPI.yaml`.
+- Risk assessment is asynchronous: accepted Reports start with `analysis_status: Pending`, and failed assessments can be retried with an HTTP `202` response.
 - Which mailbox provider and provider message identifier will be used for the demonstration?
 - Which optional model and threat-intelligence integrations, if any, will be enabled for the MVP?
 - What exact instructor rubric or template must be applied before final submission?
