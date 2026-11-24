@@ -1,0 +1,1029 @@
+openapi: 3.0.3
+info:
+  title: AI-Assisted Phishing Triage System API
+  description: |
+    REST API for reporting suspicious emails, performing advisory risk assessments, and managing triage cases.
+
+    Aligned with System Vision & Boundary v1.1 (reference document):
+    - Each accepted Report creates exactly one Case (1:1). Cross-employee case merging is out of MVP scope.
+    - `risk_category` (Low / Medium / Critical) is advisory only. The analyst's `final_classification` is stored separately and is required to resolve a Case.
+    - `analysis_status` (RiskAssessment) is separate from `investigation_status` (Case). A failed analysis never closes or deletes a Case.
+    - Forwarded-mailbox ingestion is performed by an internal inbox worker and has no public endpoint. Forwarded Reports appear in `GET /reports` for analysts; employees see only their own `Verified` Reports.
+    - Account and mailbox administration (System Administrator) is out of the MVP API scope.
+  version: 1.1.0
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development server
+
+tags:
+  - name: Auth
+    description: Sign-in and token issuance
+  - name: Reports
+    description: Report submission and retrieval (Employee and Analyst)
+  - name: Cases
+    description: IT/SOC Analyst case management and classification
+  - name: Notes
+    description: Analyst investigation notes and case history
+  - name: Metrics
+    description: Triage workload summary (Could priority)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      summary: Sign in
+      description: Exchanges credentials for an access token. Invalid credentials return 401 without revealing which value was wrong.
+      tags:
+        - Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: analyst@example.test
+              password: example-password
+      responses:
+        '200':
+          description: Authentication succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                access_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example.signature
+                token_type: Bearer
+                expires_in: 3600
+                role: Analyst
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /reports:
+    post:
+      operationId: createReport
+      summary: Submit a suspicious email report
+      description: |
+        Allows an authenticated employee to submit a suspicious email, either as JSON fields or by uploading the original `.eml` file.
+        Automatically generates exactly one linked Case (`investigation_status=New`) and its RiskAssessment (`analysis_status=Pending`).
+        An uploaded `.eml` file is parsed as text only; attachments are never opened and links are never followed.
+      tags:
+        - Reports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportCreate'
+            example:
+              sender_address: billing@suspicious-example.test
+              subject: Urgent - verify your account
+              body_text: Please confirm your password using the link below.
+              urls:
+                - http://suspicious-example.test/verify
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - eml_file
+              properties:
+                eml_file:
+                  type: string
+                  format: binary
+                  description: The original email as a `.eml` (MIME) file. Other file types return 415; files above the agreed size limit return 413.
+      responses:
+        '201':
+          description: Report successfully created and Case generated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+              example:
+                id: 3f2b8c1e-5a4d-4c7e-9b1a-2d6e8f0a1b3c
+                source_channel: Manual
+                submitter_id: 7a1c9d2e-3b4f-4e5a-8c6d-0f1e2d3c4b5a
+                submitter_attribution_status: Verified
+                received_content:
+                  sender_address: billing@suspicious-example.test
+                  subject: Urgent - verify your account
+                  body_text: Please confirm your password using the link below.
+                  urls:
+                    - http://suspicious-example.test/verify
+                case_id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                investigation_status: New
+                created_at: '2026-11-05T19:30:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+
+    get:
+      operationId: listReports
+      summary: List reports
+      description: Returns a paginated list of reports, newest first. Employees only see their own `Verified` reports (unverified forwarded reports are excluded). Analysts see all reports.
+      tags:
+        - Reports
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of reports.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportList'
+              example:
+                items:
+                  - id: 3f2b8c1e-5a4d-4c7e-9b1a-2d6e8f0a1b3c
+                    source_channel: Manual
+                    submitter_id: 7a1c9d2e-3b4f-4e5a-8c6d-0f1e2d3c4b5a
+                    submitter_attribution_status: Verified
+                    received_content:
+                      sender_address: billing@suspicious-example.test
+                      subject: Urgent - verify your account
+                    case_id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                    investigation_status: New
+                    created_at: '2026-11-05T19:30:00Z'
+                page: 1
+                page_size: 20
+                total: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /reports/{id}:
+    get:
+      operationId: getReport
+      summary: Get a specific report
+      description: Retrieves one report with its safely extracted content, attribution status, and linked Case ID and status. Employees can read only their own `Verified` reports (403 otherwise). Analysts can read any report. Email content must be rendered as plain text by clients.
+      tags:
+        - Reports
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+      responses:
+        '200':
+          description: Report details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+              example:
+                id: 3f2b8c1e-5a4d-4c7e-9b1a-2d6e8f0a1b3c
+                source_channel: Forwarded
+                submitter_id: null
+                submitter_attribution_status: Unverified
+                received_content:
+                  sender_address: billing@suspicious-example.test
+                  subject: Urgent - verify your account
+                  body_text: Please confirm your password using the link below.
+                  urls:
+                    - http://suspicious-example.test/verify
+                case_id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                investigation_status: New
+                created_at: '2026-11-05T19:30:00Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /reports/{id}/analysis:
+    post:
+      operationId: retryReportAnalysis
+      summary: Retry risk analysis (Analyst only)
+      description: |
+        Re-runs the advisory risk assessment for a report whose `analysis_status` is `Failed`.
+        Analysis normally starts automatically after intake; this endpoint exists only for retry.
+        A retry while the analysis is `Pending` or `Completed` returns 409. The Case lifecycle is never changed by analysis.
+      tags:
+        - Reports
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+      responses:
+        '202':
+          description: Retry accepted; analysis is running asynchronously and `analysis_status` is `Pending` until it becomes `Completed` or `Failed`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskAssessment'
+              example:
+                analysis_status: Pending
+                risk_category: null
+                score: null
+                evidence: []
+                model_version: null
+                failure_reason: null
+                completed_at: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /cases:
+    get:
+      operationId: listCases
+      summary: List cases (Analyst Dashboard)
+      description: |
+        Retrieves a paginated list of cases for the IT/SOC Analyst dashboard. Analyst only.
+        Default sort is `priority`: `Critical` before `Medium` before `Low`; cases without a completed assessment are listed after scored cases and are never hidden. `newest` sorts by creation time, newest first.
+      tags:
+        - Cases
+      parameters:
+        - in: query
+          name: investigation_status
+          schema:
+            $ref: '#/components/schemas/InvestigationStatus'
+        - in: query
+          name: analysis_status
+          schema:
+            $ref: '#/components/schemas/AnalysisStatus'
+        - in: query
+          name: risk_category
+          schema:
+            $ref: '#/components/schemas/RiskCategory'
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [priority, newest]
+            default: priority
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of triage cases.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseList'
+              example:
+                items:
+                  - id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                    report_id: 3f2b8c1e-5a4d-4c7e-9b1a-2d6e8f0a1b3c
+                    subject: Urgent - verify your account
+                    investigation_status: New
+                    analysis_status: Completed
+                    risk_category: Critical
+                    score: 92
+                    assignee_id: null
+                    created_at: '2026-11-05T19:30:00Z'
+                    updated_at: '2026-11-05T19:30:08Z'
+                page: 1
+                page_size: 20
+                total: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /cases/{id}:
+    get:
+      operationId: getCase
+      summary: Get a specific case
+      description: Retrieves full details of a specific case, including its advisory risk assessment and the associated report. Analyst only.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '#/components/parameters/CaseId'
+      responses:
+        '200':
+          description: Case details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Case'
+              example:
+                id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                report_id: 3f2b8c1e-5a4d-4c7e-9b1a-2d6e8f0a1b3c
+                report:
+                  id: 3f2b8c1e-5a4d-4c7e-9b1a-2d6e8f0a1b3c
+                  source_channel: Manual
+                  submitter_id: 7a1c9d2e-3b4f-4e5a-8c6d-0f1e2d3c4b5a
+                  submitter_attribution_status: Verified
+                  received_content:
+                    sender_address: billing@suspicious-example.test
+                    subject: Urgent - verify your account
+                    body_text: Please confirm your password using the link below.
+                    urls:
+                      - http://suspicious-example.test/verify
+                  case_id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                  investigation_status: Under Review
+                  created_at: '2026-11-05T19:30:00Z'
+                investigation_status: Under Review
+                final_classification: null
+                risk_assessment:
+                  analysis_status: Completed
+                  risk_category: Critical
+                  score: 92
+                  evidence:
+                    - Urgency language requesting credentials
+                    - Link domain does not match sender domain
+                  model_version: rules-1.0
+                  failure_reason: null
+                  completed_at: '2026-11-05T19:30:08Z'
+                assignee_id: 5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a
+                created_at: '2026-11-05T19:30:00Z'
+                updated_at: '2026-11-05T19:45:00Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      operationId: updateCase
+      summary: Update case status, assignment or classification
+      description: |
+        Analyst only. Updates the investigation status, assigns the case to an analyst, or records the final classification.
+        Rules:
+        - `New` to `Under Review` is allowed regardless of `analysis_status` (pending, completed or failed).
+        - `Under Review` to `Resolved` is allowed only when a `final_classification` (`Phishing`, `Legitimate` or `Inconclusive`) is sent in the same request or already recorded; otherwise 400. The status change and classification are saved atomically.
+        - Any other lifecycle transition returns 409 and changes nothing.
+        - `assignee_id` must belong to a user with the Analyst role; otherwise 400. A case can be reassigned.
+        - The risk assessment is never changed by this operation and the advisory score never becomes the final classification automatically.
+        Every change is recorded in the case history.
+      tags:
+        - Cases
+      parameters:
+        - $ref: '#/components/parameters/CaseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CasePatch'
+            example:
+              investigation_status: Resolved
+              final_classification: Phishing
+      responses:
+        '200':
+          description: Case updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Case'
+              example:
+                id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                report_id: 3f2b8c1e-5a4d-4c7e-9b1a-2d6e8f0a1b3c
+                investigation_status: Resolved
+                final_classification: Phishing
+                risk_assessment:
+                  analysis_status: Completed
+                  risk_category: Critical
+                  score: 92
+                  evidence:
+                    - Urgency language requesting credentials
+                  model_version: rules-1.0
+                  failure_reason: null
+                  completed_at: '2026-11-05T19:30:08Z'
+                assignee_id: 5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a
+                created_at: '2026-11-05T19:30:00Z'
+                updated_at: '2026-11-05T20:10:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /cases/{id}/notes:
+    post:
+      operationId: addCaseNote
+      summary: Add an investigation note
+      description: Allows an analyst to append a note to the case history. Employees cannot add or see notes.
+      tags:
+        - Notes
+      parameters:
+        - $ref: '#/components/parameters/CaseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteCreate'
+            example:
+              note_text: Sender domain registered two days ago; confirmed with IT that no such billing vendor exists.
+      responses:
+        '201':
+          description: Note successfully added.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseHistory'
+              example:
+                id: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+                case_id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                actor_id: 5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a
+                action_type: NoteAdded
+                note_text: Sender domain registered two days ago; confirmed with IT that no such billing vendor exists.
+                old_value: null
+                new_value: null
+                timestamp: '2026-11-05T19:50:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /cases/{id}/history:
+    get:
+      operationId: listCaseHistory
+      summary: Get case history and notes
+      description: Retrieves the append-only audit trail and analyst notes for a specific case in time order. Analyst only. History entries cannot be edited or deleted through the API.
+      tags:
+        - Notes
+      parameters:
+        - $ref: '#/components/parameters/CaseId'
+      responses:
+        '200':
+          description: List of history entries and notes, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CaseHistory'
+              example:
+                - id: 0f1e2d3c-4b5a-4968-8776-655443322110
+                  case_id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                  actor_id: 7a1c9d2e-3b4f-4e5a-8c6d-0f1e2d3c4b5a
+                  action_type: ReportCreated
+                  note_text: null
+                  old_value: null
+                  new_value: New
+                  timestamp: '2026-11-05T19:30:00Z'
+                - id: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+                  case_id: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+                  actor_id: 5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a
+                  action_type: StatusChanged
+                  note_text: null
+                  old_value: New
+                  new_value: Under Review
+                  timestamp: '2026-11-05T19:45:00Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /metrics/summary:
+    get:
+      operationId: getMetricsSummary
+      summary: Get triage workload summary (Could priority)
+      description: Returns case counts by investigation status and by advisory risk category. Figures match the case list. Analyst only. This operation has Could priority and may be deferred.
+      tags:
+        - Metrics
+      responses:
+        '200':
+          description: Workload summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsSummary'
+              example:
+                total_cases: 12
+                by_investigation_status:
+                  New: 5
+                  Under Review: 4
+                  Resolved: 3
+                by_risk_category:
+                  Low: 3
+                  Medium: 4
+                  Critical: 3
+                  Unscored: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ReportId:
+      in: path
+      name: id
+      required: true
+      description: Report ID.
+      schema:
+        type: string
+        format: uuid
+    CaseId:
+      in: path
+      name: id
+      required: true
+      description: Case ID.
+      schema:
+        type: string
+        format: uuid
+    Page:
+      in: query
+      name: page
+      description: 1-based page number.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      in: query
+      name: page_size
+      description: Items per page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    InvestigationStatus:
+      type: string
+      enum: [New, Under Review, Resolved]
+      description: Case investigation lifecycle, managed by analysts. Separate from `analysis_status`.
+
+    AnalysisStatus:
+      type: string
+      enum: [Pending, Completed, Failed]
+      description: Risk assessment processing state. Failure does not close or delete a case.
+
+    RiskCategory:
+      type: string
+      enum: [Low, Medium, Critical]
+      description: Advisory severity label (`Critical` is highest). Not the analyst's final classification.
+
+    FinalClassification:
+      type: string
+      enum: [Phishing, Legitimate, Inconclusive]
+      description: Recorded only by an authorized analyst.
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - expires_in
+        - role
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Token lifetime in seconds.
+        role:
+          type: string
+          enum: [Employee, Analyst, Administrator]
+
+    ReceivedContent:
+      type: object
+      description: Safely extracted sender metadata, subject, text, and URLs. Never executed or opened; clients render it as plain text.
+      properties:
+        sender_address:
+          type: string
+          format: email
+          description: Address of the original suspicious sender.
+        subject:
+          type: string
+        body_text:
+          type: string
+        urls:
+          type: array
+          items:
+            type: string
+
+    ReportCreate:
+      type: object
+      required:
+        - sender_address
+        - subject
+      properties:
+        sender_address:
+          type: string
+          format: email
+          description: The email address of the suspicious sender.
+        subject:
+          type: string
+          minLength: 1
+          description: Subject line of the suspicious email.
+        body_text:
+          type: string
+          description: Extracted text body of the email.
+        urls:
+          type: array
+          items:
+            type: string
+          description: List of URLs extracted safely without execution.
+
+    Report:
+      type: object
+      required:
+        - id
+        - source_channel
+        - submitter_attribution_status
+        - received_content
+        - case_id
+        - investigation_status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_channel:
+          type: string
+          enum: [Manual, Forwarded]
+          description: Identifies how the report entered the system.
+        submitter_id:
+          type: string
+          format: uuid
+          nullable: true
+        submitter_attribution_status:
+          type: string
+          enum: [Verified, Unverified]
+          description: Only Verified reports are visible in the employee's history. A forwarded email's `From` header or a directory address match does not make a report Verified.
+        received_content:
+          $ref: '#/components/schemas/ReceivedContent'
+        case_id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: The single Case created for this Report (1:1).
+        investigation_status:
+          $ref: '#/components/schemas/InvestigationStatus'
+        created_at:
+          type: string
+          format: date-time
+
+    ReportList:
+      type: object
+      required:
+        - items
+        - page
+        - page_size
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Report'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    RiskAssessment:
+      type: object
+      required:
+        - analysis_status
+      properties:
+        analysis_status:
+          $ref: '#/components/schemas/AnalysisStatus'
+        risk_category:
+          type: string
+          nullable: true
+          enum: [Low, Medium, Critical, null]
+          description: Advisory severity label. Null until the analysis is Completed. Not the final verdict.
+        score:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: Advisory score. Null until the analysis is Completed.
+        evidence:
+          type: array
+          items:
+            type: string
+          description: Explainable indicators supporting the risk score.
+        model_version:
+          type: string
+          nullable: true
+          description: Model or ruleset version that produced the result.
+        failure_reason:
+          type: string
+          nullable: true
+          description: Diagnostic shown to analysts when `analysis_status` is Failed.
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Case:
+      type: object
+      required:
+        - id
+        - report_id
+        - investigation_status
+        - risk_assessment
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        report_id:
+          type: string
+          format: uuid
+          description: One-to-one link to the originating Report.
+        report:
+          $ref: '#/components/schemas/Report'
+        investigation_status:
+          $ref: '#/components/schemas/InvestigationStatus'
+        final_classification:
+          type: string
+          nullable: true
+          enum: [Phishing, Legitimate, Inconclusive, null]
+          description: Required to transition investigation_status to Resolved. Stored separately from the advisory risk category.
+        risk_assessment:
+          $ref: '#/components/schemas/RiskAssessment'
+        assignee_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CaseSummary:
+      type: object
+      required:
+        - id
+        - report_id
+        - subject
+        - investigation_status
+        - analysis_status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        report_id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+          description: Subject of the reported email.
+        investigation_status:
+          $ref: '#/components/schemas/InvestigationStatus'
+        analysis_status:
+          $ref: '#/components/schemas/AnalysisStatus'
+        risk_category:
+          type: string
+          nullable: true
+          enum: [Low, Medium, Critical, null]
+        score:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+        assignee_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CaseList:
+      type: object
+      required:
+        - items
+        - page
+        - page_size
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CaseSummary'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    CasePatch:
+      type: object
+      minProperties: 1
+      properties:
+        investigation_status:
+          $ref: '#/components/schemas/InvestigationStatus'
+        final_classification:
+          $ref: '#/components/schemas/FinalClassification'
+        assignee_id:
+          type: string
+          format: uuid
+          description: User ID of an analyst to assign the case to.
+
+    NoteCreate:
+      type: object
+      required:
+        - note_text
+      properties:
+        note_text:
+          type: string
+          minLength: 1
+
+    CaseHistory:
+      type: object
+      required:
+        - id
+        - case_id
+        - action_type
+        - timestamp
+      properties:
+        id:
+          type: string
+          format: uuid
+        case_id:
+          type: string
+          format: uuid
+        actor_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Null for system-generated events such as analysis results.
+        action_type:
+          type: string
+          enum:
+            - ReportCreated
+            - AnalysisCompleted
+            - AnalysisFailed
+            - StatusChanged
+            - ClassificationSet
+            - AssigneeChanged
+            - NoteAdded
+        note_text:
+          type: string
+          nullable: true
+        old_value:
+          type: string
+          nullable: true
+          description: Previous value where the action changes one.
+        new_value:
+          type: string
+          nullable: true
+          description: New value where the action changes one.
+        timestamp:
+          type: string
+          format: date-time
+
+    MetricsSummary:
+      type: object
+      required:
+        - total_cases
+        - by_investigation_status
+        - by_risk_category
+      properties:
+        total_cases:
+          type: integer
+        by_investigation_status:
+          type: object
+          properties:
+            New:
+              type: integer
+            Under Review:
+              type: integer
+            Resolved:
+              type: integer
+        by_risk_category:
+          type: object
+          properties:
+            Low:
+              type: integer
+            Medium:
+              type: integer
+            Critical:
+              type: integer
+            Unscored:
+              type: integer
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Bad Request. Invalid input data, such as missing required fields, an unknown enum or filter value, an empty note, a missing final classification when resolving, or an assignee who is not an analyst.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 400
+            message: 'Invalid or missing fields: subject'
+    Unauthorized:
+      description: Unauthorized. Missing, invalid or expired authentication token, or invalid credentials.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 401
+            message: Missing or invalid authentication token.
+    Forbidden:
+      description: Forbidden. User lacks the required role or access (e.g., Employee trying to access Analyst routes or another person's report).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 403
+            message: Analyst role required.
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 404
+            message: Case not found.
+    Conflict:
+      description: Conflict. Illegal lifecycle transition, or an analysis retry while the analysis is not Failed. Nothing is changed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 409
+            message: Case cannot move from New to Resolved.
+    PayloadTooLarge:
+      description: Payload Too Large. The uploaded file exceeds the agreed size limit; no report is created.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 413
+            message: Uploaded file exceeds the size limit.
+    UnsupportedMediaType:
+      description: Unsupported Media Type. Only `.eml` uploads are accepted; no report is created.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 415
+            message: Only .eml files are supported.
