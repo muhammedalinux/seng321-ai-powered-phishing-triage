@@ -15,9 +15,23 @@ The objective is to prepare the project for MVP development in Sprint 3.
 
 ## 2. Sprint Progress Overview
 
-This section summarizes the progress of Sprint 2 tasks based on GitHub Issues and team contributions.
+**Tracking Date:** November 24, 2026
 
-Progress data will be updated using the latest verified GitHub Issue statuses.
+| Metric | Value |
+|---|---|
+| Total Sprint 2 Issues | 13 |
+| Closed Issues | 2 |
+| Open Issues | 11 |
+| Issue Closure Rate | 15.4% |
+
+### Closed Issues
+- #20 – Quality Measure and Verification Plan (Sema)
+- #28 – Sprint 2 Quality and Deliverables Review (Sema)
+
+### Open Issues
+- #17, #18, #19, #21, #22, #23, #24, #25, #26, #27, #29
+
+**Note:** These figures represent GitHub Issue statuses at the time of review. An open Issue may still have work in progress. A closed Issue does not independently confirm that all deliverables have been reviewed and merged.
 
 ## 3. Completed Deliverables
 
