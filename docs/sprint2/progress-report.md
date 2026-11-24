@@ -35,7 +35,23 @@ The objective is to prepare the project for MVP development in Sprint 3.
 
 ## 3. Completed Deliverables
 
-This section records completed Sprint 2 deliverables and their supporting GitHub evidence.
+
+GitHub currently shows two closed Sprint 2 Issues.
+
+| Issue | Deliverable | Owner | GitHub Status | Evidence |
+|---|---|---|---|---|
+| #20 | Quality Measure and Verification Plan | Sema | Closed | Pending PR/document verification |
+| #28 | Sprint 2 Quality and Deliverables Review | Sema | Closed | Pending PR/document verification |
+
+### Evidence Review
+
+- Issue #20: https://github.com/muhammedalinux/seng321-ai-powered-phishing-triage/issues/20
+- Issue #28: https://github.com/muhammedalinux/seng321-ai-powered-phishing-triage/issues/28
+
+Both Issues are closed, but their documented acceptance criteria and Pull Request evidence still need to be verified.
+
+Closing an Issue is not considered sufficient evidence of a completed and reviewed deliverable.
+
 
 ## 4. Ongoing and Pending Tasks
 
