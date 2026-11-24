@@ -51,6 +51,8 @@ All test emails are synthetic or taken from public datasets. We do not use real 
 
 The "Covers" column can be used directly in the Requirements Traceability Matrix.
 
+FR-019 has no scenario yet, because the OpenAPI has no administration endpoints (see Section 5). Scenarios will be added once this is decided.
+
 ### 3.1 Sign-in and access
 
 | ID | Scenario | Expected result | Covers |
