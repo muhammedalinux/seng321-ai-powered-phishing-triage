@@ -73,6 +73,7 @@ paths:
         Allows an authenticated employee to submit a suspicious email, either as JSON fields or by uploading the original `.eml` file.
         Automatically generates exactly one linked Case (`investigation_status=New`) and its RiskAssessment (`analysis_status=Pending`).
         An uploaded `.eml` file is parsed as text only; attachments are never opened and links are never followed.
+        Uploaded `.eml` files are limited to 5 MB; larger files return 413 and do not create a Report.
       tags:
         - Reports
       requestBody:
@@ -96,7 +97,7 @@ paths:
                 eml_file:
                   type: string
                   format: binary
-                  description: The original email as a `.eml` (MIME) file. Other file types return 415; files above the agreed size limit return 413.
+                  description: The original email as a `.eml` (MIME) file, limited to 5 MB. Other file types return 415; larger files return 413.
       responses:
         '201':
           description: Report successfully created and Case generated.
@@ -207,14 +208,14 @@ paths:
       description: |
         Re-runs the advisory risk assessment for a report whose `analysis_status` is `Failed`.
         Analysis normally starts automatically after intake; this endpoint exists only for retry.
-        A retry while the analysis is `Pending` or `Completed` returns 409. The Case lifecycle is never changed by analysis.
+        A retry while the analysis is `Pending` or `Completed` returns 409. The assessment attempt has a 30-second timeout; a timeout produces `analysis_status=Failed` with a failure reason. The Case lifecycle is never changed by analysis.
       tags:
         - Reports
       parameters:
         - $ref: '#/components/parameters/ReportId'
       responses:
         '202':
-          description: Retry accepted; analysis is running asynchronously and `analysis_status` is `Pending` until it becomes `Completed` or `Failed`.
+          description: Retry accepted; analysis is running asynchronously and `analysis_status` is `Pending` until it becomes `Completed` or `Failed`. The assessment attempt times out after 30 seconds.
           content:
             application/json:
               schema:
